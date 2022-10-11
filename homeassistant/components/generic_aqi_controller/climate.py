@@ -1,4 +1,4 @@
-"""Adds support for generic thermostat units."""
+"""Adds support for generic aqi controller."""
 from __future__ import annotations
 
 import asyncio
@@ -38,6 +38,8 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import DOMAIN as HA_DOMAIN, CoreState, HomeAssistant, callback
+from homeassistant.components.fan import DOMAIN as FAN_DOMAIN, SERVICE_SET_PERCENTAGE, ATTR_PERCENTAGE
+
 from homeassistant.exceptions import ConditionError
 from homeassistant.helpers import condition
 import homeassistant.helpers.config_validation as cv
@@ -55,14 +57,14 @@ from . import DOMAIN, PLATFORMS
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TOLERANCE = 0.3
-DEFAULT_NAME = "Generic Thermostat"
+DEFAULT_NAME = "Generic AQI Controller"
 
 CONF_HEATER = "heater"
 CONF_SENSOR = "target_sensor"
 CONF_MIN_TEMP = "min_temp"
 CONF_MAX_TEMP = "max_temp"
 CONF_TARGET_TEMP = "target_temp"
-CONF_AC_MODE = "ac_mode"
+# CONF_AC_MODE = "ac_mode"
 CONF_MIN_DUR = "min_cycle_duration"
 CONF_COLD_TOLERANCE = "cold_tolerance"
 CONF_HOT_TOLERANCE = "hot_tolerance"
@@ -86,7 +88,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Required(CONF_HEATER): cv.entity_id,
         vol.Required(CONF_SENSOR): cv.entity_id,
-        vol.Optional(CONF_AC_MODE): cv.boolean,
+        # vol.Optional(CONF_AC_MODE): cv.boolean,
         vol.Optional(CONF_MAX_TEMP): vol.Coerce(float),
         vol.Optional(CONF_MIN_DUR): cv.positive_time_period,
         vol.Optional(CONF_MIN_TEMP): vol.Coerce(float),
@@ -125,7 +127,7 @@ async def async_setup_platform(
     min_temp = config.get(CONF_MIN_TEMP)
     max_temp = config.get(CONF_MAX_TEMP)
     target_temp = config.get(CONF_TARGET_TEMP)
-    ac_mode = config.get(CONF_AC_MODE)
+    ac_mode = True # config.get(CONF_AC_MODE)
     min_cycle_duration = config.get(CONF_MIN_DUR)
     cold_tolerance = config.get(CONF_COLD_TOLERANCE)
     hot_tolerance = config.get(CONF_HOT_TOLERANCE)
@@ -137,6 +139,7 @@ async def async_setup_platform(
     precision = config.get(CONF_PRECISION)
     target_temperature_step = config.get(CONF_TEMP_STEP)
     unit = hass.config.units.temperature_unit
+    # unit = CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
     unique_id = config.get(CONF_UNIQUE_ID)
 
     async_add_entities(
@@ -202,10 +205,11 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
         self._saved_target_temp = target_temp or next(iter(presets.values()), None)
         self._temp_precision = precision
         self._temp_target_temperature_step = target_temperature_step
-        if self.ac_mode:
-            self._attr_hvac_modes = [HVACMode.COOL, HVACMode.OFF]
-        else:
-            self._attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
+        # if self.ac_mode:
+        self._attr_hvac_modes = [HVACMode.COOL, HVACMode.OFF]
+        # self._attr_hvac_modes = [HVACMode.FAN_ONLY, HVACMode.OFF]
+        # else:
+        #     self._attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
         self._active = False
         self._cur_temp = None
         self._temp_lock = asyncio.Lock()
@@ -479,6 +483,13 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
             too_cold = self._target_temp >= self._cur_temp + self._cold_tolerance
             too_hot = self._cur_temp >= self._target_temp + self._hot_tolerance
             if self._is_device_active:
+                if self._cur_temp > 100:
+                    await self._async_fan_set_speed_percentage(100)
+                elif self._cur_temp > 50:
+                    await self._async_fan_set_speed_percentage(66)
+                else:
+                    await self._async_fan_set_speed_percentage(33)
+
                 if (self.ac_mode and too_cold) or (not self.ac_mode and too_hot):
                     _LOGGER.info("Turning off heater %s", self.heater_entity_id)
                     await self._async_heater_turn_off()
@@ -500,6 +511,8 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
                     )
                     await self._async_heater_turn_off()
 
+
+
     @property
     def _is_device_active(self):
         """If the toggleable device is currently active."""
@@ -507,6 +520,16 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
             return None
 
         return self.hass.states.is_state(self.heater_entity_id, STATE_ON)
+
+    @property
+    def _current_fan_percentage(self):
+        """If the toggleable device is currently active."""
+        state = self.hass.states.get(self.heater_entity_id)
+        if not state:
+            return None
+
+        _LOGGER.info("Current fan percentage %d", state.attributes["percentage"])
+        return state.attributes["percentage"]
 
     async def _async_heater_turn_on(self):
         """Turn heater toggleable device on."""
@@ -520,6 +543,17 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
         data = {ATTR_ENTITY_ID: self.heater_entity_id}
         await self.hass.services.async_call(
             HA_DOMAIN, SERVICE_TURN_OFF, data, context=self._context
+        )
+
+    async def _async_fan_set_speed_percentage(self, percentage):
+        """Set fan speed."""
+        if self._current_fan_percentage == percentage:
+            return
+        _LOGGER.info("Setting fan speed percentage to %d", percentage)
+
+        data = { ATTR_ENTITY_ID: self.heater_entity_id, ATTR_PERCENTAGE: percentage }
+        await self.hass.services.async_call(
+            FAN_DOMAIN, SERVICE_SET_PERCENTAGE, data, context=self._context
         )
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:

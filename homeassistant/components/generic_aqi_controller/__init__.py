@@ -1,6 +1,6 @@
-"""The generic_thermostat component."""
+"""The generic_aqi_controller component."""
 
 from homeassistant.const import Platform
 
-DOMAIN = "generic_thermostat"
+DOMAIN = "generic_aqi_controller"
 PLATFORMS = [Platform.CLIMATE]
